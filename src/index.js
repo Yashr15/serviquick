@@ -16,8 +16,17 @@ const app = express();
 const allowed = process.env.CORS_ORIGIN?.split(",") ?? [
   "http://localhost:5173",
   "http://localhost:5174",
+  "https://serviquick.vercel.app",
 ];
-app.use(cors({ origin: allowed, credentials: true }));
+
+app.use(cors({
+  origin: [
+    "http://localhost:5173",      // local dev
+    "https://serviquick.vercel.app" // your deployed frontend
+  ],
+  credentials: true
+}));
+
 app.use(express.json());
 
 // Health

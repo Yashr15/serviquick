@@ -1,7 +1,8 @@
 import axios from "axios";
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE || "https://serviquick-backend-br68.onrender.com",
+  baseURL: import.meta.env.VITE_API_URL || "https://serviquick-backend.onrender.com",
+  withCredentials: true,
 });
 
 api.interceptors.request.use((config) => {
