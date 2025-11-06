@@ -21,11 +21,14 @@ const allowed = process.env.CORS_ORIGIN?.split(",") ?? [
 
 app.use(cors({
   origin: [
-    "http://localhost:5173",      // local dev
-    "https://serviquick.vercel.app" // your deployed frontend
+    "http://localhost:5173",
+    "https://serviquick.vercel.app"
   ],
-  credentials: true
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+  allowedHeaders: ["Content-Type", "Authorization"]
 }));
+
 
 app.use(express.json());
 
