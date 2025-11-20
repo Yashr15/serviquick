@@ -22,7 +22,7 @@ const allowed = process.env.CORS_ORIGIN?.split(",") ?? [
 app.use(cors({
   origin: [
     "http://localhost:5173",
-    "https://serviquick.vercel.app"
+    "https://serviquick-z1234.vercel.app"
   ],
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
