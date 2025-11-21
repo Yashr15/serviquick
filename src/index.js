@@ -16,7 +16,7 @@ const app = express();
 const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:5174",
-  "https://serviquick-z1234.vercel.app", // ✅ add your deployed frontend domain
+  "https://serviquick-z1234.vercel.app",
 ];
 
 app.use(cors({
@@ -28,7 +28,12 @@ app.use(cors({
     }
   },
   credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
 }));
+
+app.options("*", cors());
+
 
 // // Middleware
 // const allowed = process.env.CORS_ORIGIN?.split(",") ?? [
