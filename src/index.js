@@ -12,22 +12,39 @@ import reviewsRouter from "./routes/reviews.js"; // <-- new
 
 const app = express();
 
-// Middleware
-const allowed = process.env.CORS_ORIGIN?.split(",") ?? [
+
+const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:5174",
-  "https://serviquick.vercel.app",
+  "https://serviquick-z1234.vercel.app", // ✅ add your deployed frontend domain
 ];
 
 app.use(cors({
-  origin: [
-    "http://localhost:5173",
-    "https://serviquick-z1234.vercel.app"
-  ],
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
   credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
-  allowedHeaders: ["Content-Type", "Authorization"]
 }));
+
+// // Middleware
+// const allowed = process.env.CORS_ORIGIN?.split(",") ?? [
+//   "http://localhost:5173",
+//   "http://localhost:5174",
+//   "https://serviquick-z1234.vercel.app",
+// ];
+// app.use(cors({
+//   origin: [
+//     "http://localhost:5173",
+//     "https://serviquick-z1234.vercel.app"
+//   ],
+//   credentials: true,
+//   methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+//   allowedHeaders: ["Content-Type", "Authorization"]
+// }));
 
 
 app.use(express.json());
