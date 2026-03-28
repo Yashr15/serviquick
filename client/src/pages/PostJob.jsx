@@ -3,8 +3,8 @@ import api from "../api";
 import toast from "react-hot-toast";
 import MapPicker from "../components/MapPicker";
 import { PlusCircle, Tag, AlignLeft, MapPin } from "lucide-react";
-
-const CATEGORIES = ["plumber", "electrician", "gardener", "carpenter", "others"];
+import { JOB_CATEGORIES } from "../constants";
+import { capitalize } from "../utils";
 
 export default function PostJob() {
   const [title, setTitle] = useState("");
@@ -66,8 +66,8 @@ export default function PostJob() {
               value={category}
               onChange={(e) => setCategory(e.target.value)}
             >
-              {CATEGORIES.map(c => (
-                <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
+              {JOB_CATEGORIES.map(c => (
+                <option key={c} value={c}>{capitalize(c)}</option>
               ))}
             </select>
           </div>
