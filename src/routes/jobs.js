@@ -6,7 +6,6 @@ import { auth } from "../middleware/auth.js";
 
 const router = Router();
 
-// ── Create job (requester) ────────────────────────────────────────────────────
 // Helper: create a notification without blocking the response
 function notify(userId, type, message, data = {}) {
   Notification.create({ userId, type, message, data }).catch((err) =>
@@ -44,7 +43,7 @@ router.post("/", auth(["requester"]), async (req, res) => {
   }
 });
 
-// ── List jobs with optional geo + category + text filters + pagination ────────
+// List jobs with optional geo + category + text filters + pagination
 router.get("/", auth(["provider", "requester"]), async (req, res) => {
   try {
     const {
@@ -57,13 +56,6 @@ router.get("/", auth(["provider", "requester"]), async (req, res) => {
       page = 1,
       limit = 20,
     } = req.query;
-// List jobs with optional geo + category filters and pagination
-router.get("/", auth(["provider", "requester"]), async (req, res) => {
-  try {
-    const { category, lng, lat, radius = 5, status } = req.query;
-    const page = Math.max(1, Number(req.query.page) || 1);
-    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
-    const skip = (page - 1) * limit;
 
     const query = {};
     if (category) query.category = category;
@@ -82,7 +74,7 @@ router.get("/", auth(["provider", "requester"]), async (req, res) => {
             type: "Point",
             coordinates: [Number(lng), Number(lat)],
           },
-          $maxDistance: Number(radius) * 1000, // convert km → metres
+          $maxDistance: Number(radius) * 1000, // convert km to metres
         },
       };
     }
@@ -105,7 +97,7 @@ router.get("/", auth(["provider", "requester"]), async (req, res) => {
   }
 });
 
-// ── Get a single job ──────────────────────────────────────────────────────────
+// Get a single job
 router.get("/:id", auth(), async (req, res) => {
   try {
     const job = await Job.findById(req.params.id)
@@ -118,7 +110,7 @@ router.get("/:id", auth(), async (req, res) => {
   }
 });
 
-// ── Update job (requester, only while open) ───────────────────────────────────
+// Update job (requester, only while open)
 router.patch("/:id", auth(["requester"]), async (req, res) => {
   try {
     const job = await Job.findById(req.params.id);
@@ -142,7 +134,7 @@ router.patch("/:id", auth(["requester"]), async (req, res) => {
   }
 });
 
-// ── Cancel job (requester) ────────────────────────────────────────────────────
+// Cancel job (requester)
 router.post("/:id/cancel", auth(["requester"]), async (req, res) => {
   try {
     const job = await Job.findById(req.params.id);
@@ -163,23 +155,12 @@ router.post("/:id/cancel", auth(["requester"]), async (req, res) => {
     );
 
     res.json({ ok: true, job });
-    // $near does not support .skip()/.count() — apply limit only when using geo
-    if (lng && lat) {
-      const jobs = await Job.find(query).limit(limit);
-      return res.json({ jobs, page, limit });
-    }
-
-    const [jobs, total] = await Promise.all([
-      Job.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit),
-      Job.countDocuments(query),
-    ]);
-    res.json({ jobs, total, page, limit });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// ── Provider claims/bids on a job ─────────────────────────────────────────────
+// Provider claims/bids on a job
 router.post("/:id/claim", auth(["provider"]), async (req, res) => {
   try {
     const job = await Job.findById(req.params.id);
@@ -193,13 +174,6 @@ router.post("/:id/claim", auth(["provider"]), async (req, res) => {
     // Prevent duplicate proposal by same provider
     const existing = await Proposal.findOne({ jobId: req.params.id, providerId: req.user.id });
     if (existing) return res.status(409).json({ error: "You have already submitted a proposal for this job" });
-    const job = await Job.findById(req.params.id);
-    if (!job) return res.status(404).json({ error: "Job not found" });
-    if (job.status !== "open") return res.status(400).json({ error: "Job is no longer open" });
-
-    // Prevent duplicate proposals from the same provider
-    const existing = await Proposal.findOne({ jobId: req.params.id, providerId: req.user.id });
-    if (existing) return res.status(409).json({ error: "You already submitted a proposal for this job" });
 
     const proposal = await Proposal.create({
       jobId: req.params.id,
@@ -207,7 +181,6 @@ router.post("/:id/claim", auth(["provider"]), async (req, res) => {
       message,
       bidAmount: Number(bidAmount),
     });
-    res.status(201).json(proposal);
 
     // Notify the job requester
     notify(job.requesterId, "proposal_received",
@@ -215,14 +188,14 @@ router.post("/:id/claim", auth(["provider"]), async (req, res) => {
       { jobId: job._id, proposalId: proposal._id }
     );
 
-    res.json(proposal);
+    res.status(201).json(proposal);
   } catch (e) {
     if (e?.code === 11000) return res.status(409).json({ error: "You already submitted a proposal for this job" });
     res.status(500).json({ error: e.message });
   }
 });
 
-// ── Requester accepts a specific proposal ─────────────────────────────────────
+// Requester accepts a specific proposal
 router.post("/:id/accept", auth(["requester"]), async (req, res) => {
   try {
     const { proposalId } = req.body;
@@ -274,7 +247,7 @@ router.post("/:id/accept", auth(["requester"]), async (req, res) => {
   }
 });
 
-// ── Get all proposals for a job ───────────────────────────────────────────────
+// Get all proposals for a job
 router.get("/:id/proposals", auth(["requester", "provider"]), async (req, res) => {
   try {
     const props = await Proposal.find({ jobId: req.params.id })
@@ -286,7 +259,7 @@ router.get("/:id/proposals", auth(["requester", "provider"]), async (req, res) =
   }
 });
 
-// ── My jobs (requester) ───────────────────────────────────────────────────────
+// My jobs (requester)
 router.get("/me/requester", auth(["requester"]), async (req, res) => {
   try {
     const { status, page = 1, limit = 20 } = req.query;
@@ -310,7 +283,7 @@ router.get("/me/requester", auth(["requester"]), async (req, res) => {
   }
 });
 
-// ── My bids (provider) ────────────────────────────────────────────────────────
+// My bids (provider)
 router.get("/me/provider", auth(["provider"]), async (req, res) => {
   try {
     const { status, page = 1, limit = 20 } = req.query;
@@ -335,7 +308,7 @@ router.get("/me/provider", auth(["provider"]), async (req, res) => {
   }
 });
 
-// ── Mark job complete & mock payment ─────────────────────────────────────────
+// Mark job complete & mock payment
 router.post("/:id/complete", auth(["requester"]), async (req, res) => {
   try {
     const job = await Job.findById(req.params.id);
@@ -372,7 +345,7 @@ router.post("/:id/complete", auth(["requester"]), async (req, res) => {
   }
 });
 
-// Delete an open job (requester only, only if status is "open")
+// Delete an open job (requester only)
 router.delete("/:id", auth(["requester"]), async (req, res) => {
   try {
     const job = await Job.findById(req.params.id);
