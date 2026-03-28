@@ -1,5 +1,6 @@
 // src/routes/reviews.js
 import { Router } from "express";
+import { Types } from "mongoose";
 import { auth } from "../middleware/auth.js";
 import Job from "../models/Job.js";
 import Review from "../models/Review.js";
@@ -36,20 +37,27 @@ router.post("/", auth(["requester"]), async (req, res) => {
 
 // Provider rating summary
 router.get("/provider/:id", async (req, res) => {
-  const providerId = req.params.id;
-  const agg = await Review.aggregate([
-    { $match: { revieweeId: new (await import("mongoose")).default.Types.ObjectId(providerId) } },
-    { $group: { _id: "$revieweeId", avg: { $avg: "$rating" }, count: { $sum: 1 } } }
-  ]);
-  const summary = agg[0] ? { avg: Number(agg[0].avg.toFixed(2)), count: agg[0].count } : { avg: 0, count: 0 };
-  res.json(summary);
+  try {
+    const providerId = req.params.id;
+    const agg = await Review.aggregate([
+      { $match: { revieweeId: new Types.ObjectId(providerId) } },
+      { $group: { _id: "$revieweeId", avg: { $avg: "$rating" }, count: { $sum: 1 } } }
+    ]);
+    const summary = agg[0] ? { avg: Number(agg[0].avg.toFixed(2)), count: agg[0].count } : { avg: 0, count: 0 };
+    res.json(summary);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // All reviews for a provider (optional)
 router.get("/provider/:id/list", async (req, res) => {
-  const providerId = req.params.id;
-  const list = await Review.find({ revieweeId: providerId }).sort({ createdAt: -1 }).limit(50);
-  res.json(list);
+  try {
+    const list = await Review.find({ revieweeId: new Types.ObjectId(req.params.id) }).sort({ createdAt: -1 }).limit(50);
+    res.json(list);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 export default router;
