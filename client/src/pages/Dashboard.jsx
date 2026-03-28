@@ -23,8 +23,9 @@ export default function Dashboard() {
         tryGet("/api/jobs/me/requester"),
         tryGet("/api/jobs/me/provider"),
       ]);
-      if (rj) setReqJobs(rj);
-      if (pp) setProProps(pp);
+      // API now returns { jobs, total, ... } — handle both old and new shapes
+      if (rj) setReqJobs(Array.isArray(rj) ? rj : rj.jobs ?? []);
+      if (pp) setProProps(Array.isArray(pp) ? pp : pp.proposals ?? []);
       setLoading(false);
     })();
   }, []);

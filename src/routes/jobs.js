@@ -6,6 +6,7 @@ import { auth } from "../middleware/auth.js";
 
 const router = Router();
 
+// ── Create job (requester) ────────────────────────────────────────────────────
 // Helper: create a notification without blocking the response
 function notify(userId, type, message, data = {}) {
   Notification.create({ userId, type, message, data }).catch((err) =>
@@ -16,23 +17,46 @@ function notify(userId, type, message, data = {}) {
 // Create job (requester)
 router.post("/", auth(["requester"]), async (req, res) => {
   try {
-    const { title, description, category, location } = req.body;
-    if (!title || !category || !location?.coordinates)
-      return res.status(400).json({ error: "Missing fields" });
-
-    const job = await Job.create({
+    const {
       title,
       description,
       category,
       location,
+      budget = {},
+      tags = [],
+    } = req.body;
+
+    if (!title || !category || !location?.coordinates)
+      return res.status(400).json({ error: "Missing required fields: title, category, location.coordinates" });
+
+    const job = await Job.create({
+      title: title.trim(),
+      description: description?.trim() ?? "",
+      category,
+      location,
+      budget,
+      tags,
       requesterId: req.user.id,
     });
-    res.json(job);
+    res.status(201).json(job);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
+// ── List jobs with optional geo + category + text filters + pagination ────────
+router.get("/", auth(["provider", "requester"]), async (req, res) => {
+  try {
+    const {
+      category,
+      status,
+      search,
+      lng,
+      lat,
+      radius = 5,
+      page = 1,
+      limit = 20,
+    } = req.query;
 // List jobs with optional geo + category filters and pagination
 router.get("/", auth(["provider", "requester"]), async (req, res) => {
   try {
@@ -45,6 +69,12 @@ router.get("/", auth(["provider", "requester"]), async (req, res) => {
     if (category) query.category = category;
     if (status) query.status = status;
 
+    // Text search (uses the text index on title+description)
+    if (search) {
+      query.$text = { $search: search };
+    }
+
+    // Geo filter
     if (lng && lat) {
       query.location = {
         $near: {
@@ -52,11 +82,87 @@ router.get("/", auth(["provider", "requester"]), async (req, res) => {
             type: "Point",
             coordinates: [Number(lng), Number(lat)],
           },
-          $maxDistance: Number(radius) * 1000, // meters
+          $maxDistance: Number(radius) * 1000, // convert km → metres
         },
       };
     }
 
+    const pageNum = Math.max(1, Number(page));
+    const limitNum = Math.min(100, Math.max(1, Number(limit)));
+    const skip = (pageNum - 1) * limitNum;
+
+    const [jobs, total] = await Promise.all([
+      Job.find(query)
+        .sort(search ? { score: { $meta: "textScore" } } : { createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum),
+      Job.countDocuments(query),
+    ]);
+
+    res.json({ jobs, total, page: pageNum, pages: Math.ceil(total / limitNum) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Get a single job ──────────────────────────────────────────────────────────
+router.get("/:id", auth(), async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id)
+      .populate("requesterId", "name email")
+      .populate("assignedProviderId", "name email categories");
+    if (!job) return res.status(404).json({ error: "Job not found" });
+    res.json(job);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Update job (requester, only while open) ───────────────────────────────────
+router.patch("/:id", auth(["requester"]), async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id);
+    if (!job) return res.status(404).json({ error: "Job not found" });
+    if (String(job.requesterId) !== req.user.id)
+      return res.status(403).json({ error: "Not your job" });
+    if (job.status !== "open")
+      return res.status(400).json({ error: "Can only edit open jobs" });
+
+    const { title, description, category, budget, tags } = req.body;
+    if (title) job.title = title.trim();
+    if (description !== undefined) job.description = description.trim();
+    if (category) job.category = category;
+    if (budget) job.budget = budget;
+    if (tags) job.tags = tags;
+
+    await job.save();
+    res.json(job);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Cancel job (requester) ────────────────────────────────────────────────────
+router.post("/:id/cancel", auth(["requester"]), async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id);
+    if (!job) return res.status(404).json({ error: "Job not found" });
+    if (String(job.requesterId) !== req.user.id)
+      return res.status(403).json({ error: "Not your job" });
+    if (!["open", "assigned"].includes(job.status))
+      return res.status(400).json({ error: "Cannot cancel a completed or already cancelled job" });
+
+    job.status = "cancelled";
+    job.cancelledAt = new Date();
+    await job.save();
+
+    // Reject all pending proposals
+    await Proposal.updateMany(
+      { jobId: job._id, status: "pending" },
+      { $set: { status: "rejected" } }
+    );
+
+    res.json({ ok: true, job });
     // $near does not support .skip()/.count() — apply limit only when using geo
     if (lng && lat) {
       const jobs = await Job.find(query).limit(limit);
@@ -73,10 +179,20 @@ router.get("/", auth(["provider", "requester"]), async (req, res) => {
   }
 });
 
-// Provider claims a job
+// ── Provider claims/bids on a job ─────────────────────────────────────────────
 router.post("/:id/claim", auth(["provider"]), async (req, res) => {
   try {
+    const job = await Job.findById(req.params.id);
+    if (!job) return res.status(404).json({ error: "Job not found" });
+    if (job.status !== "open") return res.status(400).json({ error: "Job is no longer open" });
+
     const { message = "", bidAmount } = req.body;
+    if (!bidAmount || Number(bidAmount) <= 0)
+      return res.status(400).json({ error: "bidAmount must be a positive number" });
+
+    // Prevent duplicate proposal by same provider
+    const existing = await Proposal.findOne({ jobId: req.params.id, providerId: req.user.id });
+    if (existing) return res.status(409).json({ error: "You have already submitted a proposal for this job" });
     const job = await Job.findById(req.params.id);
     if (!job) return res.status(404).json({ error: "Job not found" });
     if (job.status !== "open") return res.status(400).json({ error: "Job is no longer open" });
@@ -89,8 +205,9 @@ router.post("/:id/claim", auth(["provider"]), async (req, res) => {
       jobId: req.params.id,
       providerId: req.user.id,
       message,
-      bidAmount,
+      bidAmount: Number(bidAmount),
     });
+    res.status(201).json(proposal);
 
     // Notify the job requester
     notify(job.requesterId, "proposal_received",
@@ -105,7 +222,7 @@ router.post("/:id/claim", auth(["provider"]), async (req, res) => {
   }
 });
 
-// Requester accepts a specific proposal for a job
+// ── Requester accepts a specific proposal ─────────────────────────────────────
 router.post("/:id/accept", auth(["requester"]), async (req, res) => {
   try {
     const { proposalId } = req.body;
@@ -116,11 +233,14 @@ router.post("/:id/accept", auth(["requester"]), async (req, res) => {
     if (!job) return res.status(404).json({ error: "Job not found" });
     if (String(job.requesterId) !== req.user.id)
       return res.status(403).json({ error: "Not your job" });
+    if (job.status !== "open")
+      return res.status(400).json({ error: "Job is no longer open" });
 
     job.status = "assigned";
     job.assignedProviderId = proposal.providerId;
     job.acceptedProposalId = proposal._id;
     await job.save();
+
     proposal.status = "accepted";
     await proposal.save();
 
@@ -154,49 +274,76 @@ router.post("/:id/accept", auth(["requester"]), async (req, res) => {
   }
 });
 
-// Get all proposals for a job (requester/provider can see)
+// ── Get all proposals for a job ───────────────────────────────────────────────
 router.get("/:id/proposals", auth(["requester", "provider"]), async (req, res) => {
   try {
-    const props = await Proposal.find({ jobId: req.params.id }).sort({
-      createdAt: -1,
-    });
+    const props = await Proposal.find({ jobId: req.params.id })
+      .populate("providerId", "name email categories bio")
+      .sort({ createdAt: -1 });
     res.json(props);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// My jobs (requester)
+// ── My jobs (requester) ───────────────────────────────────────────────────────
 router.get("/me/requester", auth(["requester"]), async (req, res) => {
   try {
-    const jobs = await Job.find({ requesterId: req.user.id })
-      .sort({ createdAt: -1 });
-    res.json(jobs);
+    const { status, page = 1, limit = 20 } = req.query;
+    const query = { requesterId: req.user.id };
+    if (status) query.status = status;
+
+    const pageNum = Math.max(1, Number(page));
+    const limitNum = Math.min(50, Math.max(1, Number(limit)));
+
+    const [jobs, total] = await Promise.all([
+      Job.find(query)
+        .sort({ createdAt: -1 })
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum),
+      Job.countDocuments(query),
+    ]);
+
+    res.json({ jobs, total, page: pageNum, pages: Math.ceil(total / limitNum) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// My bids (provider)
+// ── My bids (provider) ────────────────────────────────────────────────────────
 router.get("/me/provider", auth(["provider"]), async (req, res) => {
   try {
-    const proposals = await Proposal.find({ providerId: req.user.id })
-      .populate("jobId")
-      .sort({ createdAt: -1 });
+    const { status, page = 1, limit = 20 } = req.query;
+    const query = { providerId: req.user.id };
+    if (status) query.status = status;
 
-    res.json(proposals);
+    const pageNum = Math.max(1, Number(page));
+    const limitNum = Math.min(50, Math.max(1, Number(limit)));
+
+    const [proposals, total] = await Promise.all([
+      Proposal.find(query)
+        .populate("jobId")
+        .sort({ createdAt: -1 })
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum),
+      Proposal.countDocuments(query),
+    ]);
+
+    res.json({ proposals, total, page: pageNum, pages: Math.ceil(total / limitNum) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// Requester marks job complete; mock payment based on accepted proposal
+// ── Mark job complete & mock payment ─────────────────────────────────────────
 router.post("/:id/complete", auth(["requester"]), async (req, res) => {
   try {
     const job = await Job.findById(req.params.id);
     if (!job) return res.status(404).json({ error: "Job not found" });
-    if (String(job.requesterId) !== req.user.id) return res.status(403).json({ error: "Not your job" });
-    if (job.status !== "assigned") return res.status(400).json({ error: "Job not in assigned state" });
+    if (String(job.requesterId) !== req.user.id)
+      return res.status(403).json({ error: "Not your job" });
+    if (job.status !== "assigned")
+      return res.status(400).json({ error: "Job is not in assigned state" });
 
     const accepted = await Proposal.findById(job.acceptedProposalId);
     const amount = Number(accepted?.bidAmount || 0);
@@ -206,8 +353,8 @@ router.post("/:id/complete", auth(["requester"]), async (req, res) => {
     job.payment = {
       amount,
       currency: "INR",
-      status: "paid",     // 💳 mock
-      paidAt: new Date()
+      status: "paid",
+      paidAt: new Date(),
     };
     await job.save();
 

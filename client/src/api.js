@@ -3,6 +3,7 @@ import axios from "axios";
 const BASE_URL = import.meta.env.VITE_API_URL || "https://serviquick-backend-br68.onrender.com";
 
 const api = axios.create({
+  baseURL: import.meta.env.VITE_API_URL || "http://localhost:4000",
   baseURL: BASE_URL,
   withCredentials: true,
   timeout: 15000, // 15 second request timeout
@@ -15,6 +16,17 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// Automatically handle 401 – clear stale token and redirect to login
+api.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    if (err.response?.status === 401) {
+      localStorage.removeItem("token");
+      if (window.location.pathname !== "/login") {
+        window.location.href = "/login";
+      }
+    }
+    return Promise.reject(err);
 // Retry helper for network errors (up to 2 retries with exponential back-off)
 const MAX_RETRIES = 2;
 api.interceptors.response.use(

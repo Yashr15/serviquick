@@ -1,5 +1,5 @@
 output "alb_dns_name" {
-  description = "Public DNS name of the Application Load Balancer"
+  description = "Public DNS name of the Application Load Balancer – use this as your app's entry point"
   value       = aws_lb.main.dns_name
 }
 
@@ -21,4 +21,19 @@ output "ecs_cluster_name" {
 output "vpc_id" {
   description = "ID of the VPC"
   value       = aws_vpc.main.id
+}
+
+output "backend_service_name" {
+  description = "ECS service name for the backend"
+  value       = aws_ecs_service.backend.name
+}
+
+output "frontend_service_name" {
+  description = "ECS service name for the frontend"
+  value       = aws_ecs_service.frontend.name
+}
+
+output "aws_region" {
+  description = "AWS region where resources are deployed"
+  value       = var.aws_region
 }
