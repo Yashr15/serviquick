@@ -7,6 +7,13 @@ import { auth } from "../middleware/auth.js";
 const router = Router();
 
 // ── Sign-up ───────────────────────────────────────────────────────────────────
+const signToken = (user) =>
+  jwt.sign(
+    { id: user._id, role: user.role, name: user.name },
+    process.env.JWT_SECRET,
+    { expiresIn: "7d" }
+  );
+
 router.post("/signup", async (req, res) => {
   try {
     const { name, email, password, role, categories = [], location, phone, bio = "" } = req.body;
@@ -40,6 +47,8 @@ router.post("/signup", async (req, res) => {
       { expiresIn: "7d" }
     );
     res.status(201).json({ token, user: { id: user._id, name: user.name, role: user.role } });
+    const token = signToken(user);
+    res.json({ token });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -116,6 +125,57 @@ router.post("/change-password", auth(), async (req, res) => {
     if (!ok) return res.status(401).json({ error: "Current password is incorrect" });
 
     user.passwordHash = await bcrypt.hash(newPassword, 12);
+    await user.save();
+    res.json({ ok: true });
+    const token = signToken(user);
+    res.json({ token });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get current user profile
+router.get("/me", auth(), async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select("-passwordHash");
+    if (!user) return res.status(404).json({ error: "User not found" });
+    res.json(user);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Update current user profile (name, phone, categories, location)
+router.put("/me", auth(), async (req, res) => {
+  try {
+    const { name, phone, categories, location } = req.body;
+    const update = {};
+    if (name) update.name = name;
+    if (phone !== undefined) update.phone = phone;
+    if (categories !== undefined) update.categories = categories;
+    if (location) update.location = location;
+
+    const user = await User.findByIdAndUpdate(req.user.id, update, { new: true }).select("-passwordHash");
+    res.json(user);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Change password
+router.put("/me/password", auth(), async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) return res.status(400).json({ error: "Missing fields" });
+    if (newPassword.length < 6) return res.status(400).json({ error: "Password must be at least 6 characters" });
+
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(401).json({ error: "Authentication failed" });
+
+    const ok = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!ok) return res.status(401).json({ error: "Current password is incorrect" });
+
+    user.passwordHash = await bcrypt.hash(newPassword, 10);
     await user.save();
     res.json({ ok: true });
   } catch (e) {

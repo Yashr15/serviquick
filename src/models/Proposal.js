@@ -8,4 +8,7 @@ const ProposalSchema = new mongoose.Schema({
   status: { type: String, enum: ["pending","accepted","rejected"], default: "pending" }
 }, { timestamps: true });
 
+// Prevent duplicate proposals from the same provider for the same job
+ProposalSchema.index({ jobId: 1, providerId: 1 }, { unique: true });
+
 export default mongoose.model("Proposal", ProposalSchema);

@@ -7,6 +7,9 @@ import { MapContainer, TileLayer, Marker, Popup, Circle } from "react-leaflet";
 import iconUrl from "leaflet/dist/images/marker-icon.png";
 import iconShadow from "leaflet/dist/images/marker-shadow.png";
 import { useMap } from "react-leaflet";
+import { useEffect } from "react";
+import { JOB_CATEGORIES } from "../constants";
+import { capitalize } from "../utils";
 
 // Smoothly fly to [lat,lng] when they change
 function RecenterOnUser({ lat, lng }) {
@@ -54,8 +57,6 @@ function distanceKm(lat1, lon1, lat2, lon2) {
       Math.sin(dLon / 2) ** 2;
   return (R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))).toFixed(2);
 }
-
-const CATEGORIES = ["plumber", "electrician", "gardener", "carpenter", "others"];
 
 const STATUS_COLORS = {
   plumber: "bg-blue-100 text-blue-700",
@@ -179,8 +180,9 @@ export default function JobsFeed() {
       const list = Array.isArray(data) ? data : data.jobs ?? [];
       setJobs(list);
       setTotal(typeof data.total === "number" ? data.total : list.length);
+      setJobs(data.jobs ?? data);
     } catch (e) {
-      toast.error(e.response?.data?.error || "Failed to load");
+      toast.error(e.response?.data?.error || e.message || "Failed to load");
     } finally {
       setLoading(false);
     }
@@ -263,6 +265,8 @@ export default function JobsFeed() {
               <option value="">All categories</option>
               {CATEGORIES.map(c => (
                 <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
+              {JOB_CATEGORIES.map(c => (
+                <option key={c} value={c}>{capitalize(c)}</option>
               ))}
             </select>
           </div>

@@ -7,6 +7,7 @@ import morgan from "morgan";
 import compression from "compression";
 import { rateLimit } from "express-rate-limit";
 import "./db.js"; // connects to Mongo and logs "✅ MongoDB connected"
+import { apiLimiter, authLimiter } from "./middleware/rateLimit.js";
 
 // Routers
 import authRouter from "./routes/auth.js";
@@ -29,6 +30,18 @@ const defaultOrigins = [
 const allowedOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(",").map((o) => o.trim())
   : defaultOrigins;
+import notificationsRouter from "./routes/notifications.js";
+
+const app = express();
+
+// Build allowed origins from env var (comma-separated) or defaults
+const allowedOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(",").map((o) => o.trim())
+  : [
+      "http://localhost:5173",
+      "http://localhost:5174",
+      "https://serviquick-z1234.vercel.app",
+    ];
 
 app.use(
   cors({
@@ -89,6 +102,32 @@ app.use("/api/reviews", reviewsRouter);
 app.use((err, _req, res, _next) => {
   const status = err.status || err.statusCode || 500;
   console.error(`[${new Date().toISOString()}] ${err.message}`);
+app.use(express.json());
+
+// Simple request logger
+app.use((req, _res, next) => {
+  const now = new Date().toISOString();
+  console.log(`[${now}] ${req.method} ${req.originalUrl}`);
+  next();
+});
+
+// Health check with uptime and environment info
+app.get("/", (_req, res) =>
+  res.json({ ok: true, uptime: process.uptime(), env: process.env.NODE_ENV || "development" })
+);
+
+// Mount routes
+app.use("/api/auth", authLimiter, authRouter);
+app.use("/api/jobs", apiLimiter, jobsRouter);
+app.use("/api/providers", apiLimiter, providersRouter);
+app.use("/api/reviews", apiLimiter, reviewsRouter);
+app.use("/api/notifications", apiLimiter, notificationsRouter);
+
+// Global error handler (must be last)
+// eslint-disable-next-line no-unused-vars
+app.use((err, _req, res, _next) => {
+  console.error("Unhandled error:", err);
+  const status = err.status || err.statusCode || 500;
   res.status(status).json({ error: err.message || "Internal server error" });
 });
 

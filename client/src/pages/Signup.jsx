@@ -4,8 +4,8 @@ import api from "../api";
 import toast from "react-hot-toast";
 import MapPicker from "../components/MapPicker";
 import { UserPlus, Mail, Lock, User, CheckSquare, Square, MapPin } from "lucide-react";
-
-const CATEGORIES = ["plumber", "electrician", "gardener", "carpenter"];
+import { PROVIDER_CATEGORIES } from "../constants";
+import { capitalize } from "../utils";
 
 export default function Signup() {
   const [form, setForm] = useState({
@@ -144,7 +144,7 @@ export default function Signup() {
                 <div>
                   <div className="text-sm font-medium text-gray-700 mb-2">Service categories</div>
                   <div className="flex flex-wrap gap-2">
-                    {CATEGORIES.map(c => {
+                    {PROVIDER_CATEGORIES.map(c => {
                       const selected = categories.includes(c);
                       return (
                         <button
@@ -158,7 +158,7 @@ export default function Signup() {
                           }`}
                         >
                           {selected ? <CheckSquare className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5" />}
-                          {c.charAt(0).toUpperCase() + c.slice(1)}
+                          {capitalize(c)}
                         </button>
                       );
                     })}

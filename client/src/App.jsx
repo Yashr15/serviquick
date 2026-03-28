@@ -12,6 +12,11 @@ import RateProvider from "./pages/RateProvider";
 import ProviderProfile from "./pages/ProviderProfile";
 import ProfileSettings from "./pages/ProfileSettings";
 import SearchProviders from "./pages/SearchProviders";
+import Profile from "./pages/Profile";
+import Notifications from "./pages/Notifications";
+import NotFound from "./pages/NotFound";
+
+
 
 function Private({ children }) {
   const token = localStorage.getItem("token");
@@ -46,6 +51,10 @@ export default function App() {
           <Route path="/provider/:id" element={<ProviderProfile />} />
 
           <Route path="*" element={<div className="text-gray-500 text-center py-16">404 – Page not found</div>} />
+          <Route path="/profile" element={<Private><Profile /></Private>} />
+          <Route path="/notifications" element={<Private><Notifications /></Private>} />
+
+          <Route path="*" element={<NotFound />} />
         </Routes>
       </Layout>
     </BrowserRouter>

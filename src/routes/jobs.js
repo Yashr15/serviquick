@@ -1,11 +1,20 @@
 import { Router } from "express";
 import Job from "../models/Job.js";
 import Proposal from "../models/Proposal.js";
+import Notification from "../models/Notification.js";
 import { auth } from "../middleware/auth.js";
 
 const router = Router();
 
 // ── Create job (requester) ────────────────────────────────────────────────────
+// Helper: create a notification without blocking the response
+function notify(userId, type, message, data = {}) {
+  Notification.create({ userId, type, message, data }).catch((err) =>
+    console.error("Failed to create notification:", err.message)
+  );
+}
+
+// Create job (requester)
 router.post("/", auth(["requester"]), async (req, res) => {
   try {
     const {
@@ -48,6 +57,13 @@ router.get("/", auth(["provider", "requester"]), async (req, res) => {
       page = 1,
       limit = 20,
     } = req.query;
+// List jobs with optional geo + category filters and pagination
+router.get("/", auth(["provider", "requester"]), async (req, res) => {
+  try {
+    const { category, lng, lat, radius = 5, status } = req.query;
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
+    const skip = (page - 1) * limit;
 
     const query = {};
     if (category) query.category = category;
@@ -147,6 +163,17 @@ router.post("/:id/cancel", auth(["requester"]), async (req, res) => {
     );
 
     res.json({ ok: true, job });
+    // $near does not support .skip()/.count() — apply limit only when using geo
+    if (lng && lat) {
+      const jobs = await Job.find(query).limit(limit);
+      return res.json({ jobs, page, limit });
+    }
+
+    const [jobs, total] = await Promise.all([
+      Job.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit),
+      Job.countDocuments(query),
+    ]);
+    res.json({ jobs, total, page, limit });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -166,6 +193,13 @@ router.post("/:id/claim", auth(["provider"]), async (req, res) => {
     // Prevent duplicate proposal by same provider
     const existing = await Proposal.findOne({ jobId: req.params.id, providerId: req.user.id });
     if (existing) return res.status(409).json({ error: "You have already submitted a proposal for this job" });
+    const job = await Job.findById(req.params.id);
+    if (!job) return res.status(404).json({ error: "Job not found" });
+    if (job.status !== "open") return res.status(400).json({ error: "Job is no longer open" });
+
+    // Prevent duplicate proposals from the same provider
+    const existing = await Proposal.findOne({ jobId: req.params.id, providerId: req.user.id });
+    if (existing) return res.status(409).json({ error: "You already submitted a proposal for this job" });
 
     const proposal = await Proposal.create({
       jobId: req.params.id,
@@ -174,7 +208,16 @@ router.post("/:id/claim", auth(["provider"]), async (req, res) => {
       bidAmount: Number(bidAmount),
     });
     res.status(201).json(proposal);
+
+    // Notify the job requester
+    notify(job.requesterId, "proposal_received",
+      `${req.user.name} submitted a proposal for your job "${job.title}"`,
+      { jobId: job._id, proposalId: proposal._id }
+    );
+
+    res.json(proposal);
   } catch (e) {
+    if (e?.code === 11000) return res.status(409).json({ error: "You already submitted a proposal for this job" });
     res.status(500).json({ error: e.message });
   }
 });
@@ -201,10 +244,29 @@ router.post("/:id/accept", auth(["requester"]), async (req, res) => {
     proposal.status = "accepted";
     await proposal.save();
 
+    const rejectedProposals = await Proposal.find(
+      { jobId: job._id, _id: { $ne: proposal._id } },
+      { providerId: 1 }
+    );
+
     await Proposal.updateMany(
       { jobId: job._id, _id: { $ne: proposal._id } },
       { $set: { status: "rejected" } }
     );
+
+    // Notify accepted provider
+    notify(proposal.providerId, "proposal_accepted",
+      `Your proposal for "${job.title}" was accepted!`,
+      { jobId: job._id, proposalId: proposal._id }
+    );
+
+    // Notify rejected providers
+    rejectedProposals.forEach((p) => {
+      notify(p.providerId, "proposal_rejected",
+        `Your proposal for "${job.title}" was not selected.`,
+        { jobId: job._id }
+      );
+    });
 
     res.json({ ok: true });
   } catch (e) {
@@ -296,7 +358,32 @@ router.post("/:id/complete", auth(["requester"]), async (req, res) => {
     };
     await job.save();
 
+    // Notify the assigned provider
+    if (job.assignedProviderId) {
+      notify(job.assignedProviderId, "job_completed",
+        `The job "${job.title}" has been marked complete. Payment of ₹${amount} recorded.`,
+        { jobId: job._id, amount }
+      );
+    }
+
     res.json({ ok: true, job });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete an open job (requester only, only if status is "open")
+router.delete("/:id", auth(["requester"]), async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id);
+    if (!job) return res.status(404).json({ error: "Job not found" });
+    if (String(job.requesterId) !== req.user.id) return res.status(403).json({ error: "Not your job" });
+    if (job.status !== "open") return res.status(400).json({ error: "Only open jobs can be deleted" });
+
+    await job.deleteOne();
+    // Remove associated proposals
+    await Proposal.deleteMany({ jobId: job._id });
+    res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
