@@ -2,7 +2,7 @@ import { useState } from "react";
 import api from "../api";
 import toast from "react-hot-toast";
 import MapPicker from "../components/MapPicker";
-import { PlusCircle, Tag, AlignLeft, MapPin } from "lucide-react";
+import { PlusCircle, Tag, AlignLeft, MapPin, DollarSign } from "lucide-react";
 
 const CATEGORIES = ["plumber", "electrician", "gardener", "carpenter", "others"];
 
@@ -10,6 +10,8 @@ export default function PostJob() {
   const [title, setTitle] = useState("");
   const [category, setCategory] = useState("plumber");
   const [description, setDescription] = useState("");
+  const [budgetMin, setBudgetMin] = useState("");
+  const [budgetMax, setBudgetMax] = useState("");
   const [lng, setLng] = useState(77.209);
   const [lat, setLat] = useState(28.6139);
   const [loading, setLoading] = useState(false);
@@ -19,12 +21,21 @@ export default function PostJob() {
     setLoading(true);
     try {
       await api.post("/api/jobs", {
-        title, description, category,
-        location: { type: "Point", coordinates: [Number(lng), Number(lat)] }
+        title,
+        description,
+        category,
+        location: { type: "Point", coordinates: [Number(lng), Number(lat)] },
+        budget: {
+          min: budgetMin ? Number(budgetMin) : 0,
+          max: budgetMax ? Number(budgetMax) : 0,
+          currency: "INR",
+        },
       });
       toast.success("Job posted!");
       setTitle("");
       setDescription("");
+      setBudgetMin("");
+      setBudgetMax("");
     } catch (e) {
       toast.error(e.response?.data?.error || "Failed to post");
     } finally {
@@ -84,6 +95,31 @@ export default function PostJob() {
               value={description}
               onChange={(e) => setDescription(e.target.value)}
             />
+          </div>
+
+          {/* Budget */}
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
+              <DollarSign className="w-4 h-4 text-blue-500" /> Budget range (₹, optional)
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <input
+                type="number"
+                min="0"
+                className="w-full border border-gray-300 rounded-lg py-2.5 px-4 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
+                placeholder="Min e.g. 200"
+                value={budgetMin}
+                onChange={(e) => setBudgetMin(e.target.value)}
+              />
+              <input
+                type="number"
+                min="0"
+                className="w-full border border-gray-300 rounded-lg py-2.5 px-4 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
+                placeholder="Max e.g. 1500"
+                value={budgetMax}
+                onChange={(e) => setBudgetMax(e.target.value)}
+              />
+            </div>
           </div>
 
           {/* Location */}

@@ -1,7 +1,20 @@
 import { useState } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
-import { Zap, LayoutDashboard, BriefcaseBusiness, PlusCircle, List, LogOut, LogIn, UserPlus, Menu, X } from "lucide-react";
+import {
+  Zap,
+  LayoutDashboard,
+  BriefcaseBusiness,
+  PlusCircle,
+  List,
+  LogOut,
+  LogIn,
+  UserPlus,
+  Menu,
+  X,
+  Users,
+  Settings,
+} from "lucide-react";
 
 const base = "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-150";
 const active = "bg-blue-600 text-white shadow-sm";
@@ -11,6 +24,7 @@ export default function Layout({ children }) {
   const nav = useNavigate();
   const token = localStorage.getItem("token");
   const [mobileOpen, setMobileOpen] = useState(false);
+
   const logout = () => {
     localStorage.removeItem("token");
     localStorage.removeItem("name");
@@ -25,11 +39,17 @@ export default function Layout({ children }) {
       <NavLink to="/jobs" className={({ isActive }) => `${base} ${isActive ? active : idle}`} onClick={() => setMobileOpen(false)}>
         <List className="w-4 h-4" /> Browse
       </NavLink>
+      <NavLink to="/providers" className={({ isActive }) => `${base} ${isActive ? active : idle}`} onClick={() => setMobileOpen(false)}>
+        <Users className="w-4 h-4" /> Providers
+      </NavLink>
       <NavLink to="/dashboard" className={({ isActive }) => `${base} ${isActive ? active : idle}`} onClick={() => setMobileOpen(false)}>
         <LayoutDashboard className="w-4 h-4" /> Dashboard
       </NavLink>
       <NavLink to="/my-jobs" className={({ isActive }) => `${base} ${isActive ? active : idle}`} onClick={() => setMobileOpen(false)}>
         <BriefcaseBusiness className="w-4 h-4" /> My Jobs
+      </NavLink>
+      <NavLink to="/settings" className={({ isActive }) => `${base} ${isActive ? active : idle}`} onClick={() => setMobileOpen(false)}>
+        <Settings className="w-4 h-4" /> Settings
       </NavLink>
       <button
         onClick={logout}
@@ -40,6 +60,9 @@ export default function Layout({ children }) {
     </>
   ) : (
     <>
+      <NavLink to="/providers" className={({ isActive }) => `${base} ${isActive ? active : idle}`} onClick={() => setMobileOpen(false)}>
+        <Users className="w-4 h-4" /> Providers
+      </NavLink>
       <NavLink to="/login" className={({ isActive }) => `${base} ${isActive ? active : idle}`} onClick={() => setMobileOpen(false)}>
         <LogIn className="w-4 h-4" /> Login
       </NavLink>

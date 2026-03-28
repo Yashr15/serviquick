@@ -1,14 +1,12 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import api from "../api";
 import toast from "react-hot-toast";
-import { MapPin, Hammer, Navigation, Locate, Search, SlidersHorizontal } from "lucide-react";
+import { MapPin, Hammer, Navigation, Locate, Search, SlidersHorizontal, DollarSign, X } from "lucide-react";
 import L from "leaflet";
 import { MapContainer, TileLayer, Marker, Popup, Circle } from "react-leaflet";
-import { useRef } from "react";
 import iconUrl from "leaflet/dist/images/marker-icon.png";
 import iconShadow from "leaflet/dist/images/marker-shadow.png";
 import { useMap } from "react-leaflet";
-import { useEffect } from "react";
 
 // Smoothly fly to [lat,lng] when they change
 function RecenterOnUser({ lat, lng }) {
@@ -37,7 +35,6 @@ function FitBoundsOnJobs({ lat, lng, jobs }) {
   return null;
 }
 
-
 const DefaultIcon = L.icon({
   iconUrl,
   shadowUrl: iconShadow,
@@ -52,10 +49,9 @@ function distanceKm(lat1, lon1, lat2, lon2) {
   const dLon = ((lon2 - lon1) * Math.PI) / 180;
   const a =
     Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * Math.PI / 180) *
-      Math.cos(lat2 * Math.PI / 180) *
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
       Math.sin(dLon / 2) ** 2;
-
   return (R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))).toFixed(2);
 }
 
@@ -69,13 +65,79 @@ const STATUS_COLORS = {
   others: "bg-gray-100 text-gray-700",
 };
 
+// Bid modal component
+function BidModal({ job, onClose, onSubmit }) {
+  const [message, setMessage] = useState("");
+  const [bidAmount, setBidAmount] = useState(
+    job.budget?.min > 0 ? job.budget.min : 500
+  );
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    await onSubmit({ message, bidAmount: Number(bidAmount) });
+    setLoading(false);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-gray-900">Submit Proposal</h3>
+          <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-100"><X className="w-4 h-4" /></button>
+        </div>
+        <p className="text-sm text-gray-600">{job.title} &bull; <span className="capitalize">{job.category}</span></p>
+        {job.budget?.min > 0 && (
+          <p className="text-xs text-gray-500">Client budget: ₹{job.budget.min} – ₹{job.budget.max}</p>
+        )}
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
+              <DollarSign className="w-3.5 h-3.5 text-blue-500" /> Your bid (₹)
+            </label>
+            <input
+              type="number"
+              min="1"
+              className="w-full border border-gray-300 rounded-lg py-2 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              value={bidAmount}
+              onChange={(e) => setBidAmount(e.target.value)}
+              required
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-gray-700">Message (optional)</label>
+            <textarea
+              rows={3}
+              className="w-full border border-gray-300 rounded-lg py-2 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+              placeholder="Describe your experience or availability…"
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 rounded-lg text-sm transition-colors disabled:opacity-60"
+          >
+            {loading ? "Submitting…" : "Submit Proposal"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function JobsFeed() {
   const [jobs, setJobs] = useState([]);
-  const [cat, setCat] = useState("plumber");
+  const [total, setTotal] = useState(0);
+  const [cat, setCat] = useState("");
+  const [search, setSearch] = useState("");
   const [lng, setLng] = useState(77.209);
   const [lat, setLat] = useState(28.6139);
   const [radius, setRadius] = useState(10);
   const [loading, setLoading] = useState(false);
+  const [selectedJob, setSelectedJob] = useState(null);
 
   const [trackLive, setTrackLive] = useState(false);
   const [accuracy, setAccuracy] = useState(null);
@@ -110,9 +172,13 @@ export default function JobsFeed() {
   const load = async () => {
     setLoading(true);
     try {
-      const qs = new URLSearchParams({ category: cat, lng, lat, radius });
+      const qs = new URLSearchParams({ lng, lat, radius });
+      if (cat) qs.set("category", cat);
+      if (search.trim()) qs.set("search", search.trim());
       const { data } = await api.get(`/api/jobs?${qs.toString()}`);
-      setJobs(data);
+      const list = Array.isArray(data) ? data : data.jobs ?? [];
+      setJobs(list);
+      setTotal(typeof data.total === "number" ? data.total : list.length);
     } catch (e) {
       toast.error(e.response?.data?.error || "Failed to load");
     } finally {
@@ -130,12 +196,13 @@ export default function JobsFeed() {
     }
   }, []);
 
-  const claim = async (id) => {
+  const handleClaim = async ({ message, bidAmount }) => {
     try {
-      await api.post(`/api/jobs/${id}/claim`, { message: "I can do this", bidAmount: 500 });
-      toast.success("Proposal sent!");
+      await api.post(`/api/jobs/${selectedJob._id}/claim`, { message, bidAmount });
+      toast.success("Proposal submitted!");
+      setSelectedJob(null);
     } catch (e) {
-      toast.error(e.response?.data?.error || "Failed to claim");
+      toast.error(e.response?.data?.error || "Failed to submit proposal");
     }
   };
 
@@ -150,10 +217,21 @@ export default function JobsFeed() {
 
   return (
     <div className="space-y-5">
+      {selectedJob && (
+        <BidModal
+          job={selectedJob}
+          onClose={() => setSelectedJob(null)}
+          onSubmit={handleClaim}
+        />
+      )}
+
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Nearby Jobs</h1>
-        <p className="text-sm text-gray-500 mt-1">Find open jobs in your area and send a proposal.</p>
+        <p className="text-sm text-gray-500 mt-1">
+          Find open jobs in your area and send a proposal.
+          {total > 0 && ` ${total} job${total !== 1 ? "s" : ""} found.`}
+        </p>
       </div>
 
       {/* Filters */}
@@ -161,7 +239,19 @@ export default function JobsFeed() {
         <div className="flex items-center gap-2 mb-3 text-sm font-medium text-gray-700">
           <SlidersHorizontal className="w-4 h-4 text-blue-500" /> Filters
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-3">
+          {/* Search */}
+          <div className="col-span-2 sm:col-span-3 space-y-1">
+            <label className="text-xs text-gray-500 font-medium">Keyword search</label>
+            <input
+              className="w-full border border-gray-300 rounded-lg py-2 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
+              placeholder="e.g. fix leak, paint wall…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && load()}
+            />
+          </div>
+
           {/* Category */}
           <div className="space-y-1">
             <label className="text-xs text-gray-500 font-medium">Category</label>
@@ -170,6 +260,7 @@ export default function JobsFeed() {
               value={cat}
               onChange={(e) => setCat(e.target.value)}
             >
+              <option value="">All categories</option>
               {CATEGORIES.map(c => (
                 <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
               ))}
@@ -198,18 +289,10 @@ export default function JobsFeed() {
               onChange={(e) => setLat(e.target.value)}
             />
           </div>
-          <div className="space-y-1">
-            <label className="text-xs text-gray-500 font-medium">Longitude</label>
-            <input
-              className="w-full border border-gray-300 rounded-lg py-2 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-              value={lng}
-              onChange={(e) => setLng(e.target.value)}
-            />
-          </div>
         </div>
 
         {/* Action buttons */}
-        <div className="flex gap-2 mt-3">
+        <div className="flex gap-2 flex-wrap">
           <button
             onClick={load}
             disabled={loading}
@@ -296,22 +379,32 @@ export default function JobsFeed() {
                     {j.category}
                   </span>
                 </div>
-                <div className="flex items-center gap-1 text-xs text-gray-500 mt-1.5">
-                  <MapPin className="w-3 h-3 shrink-0" />
-                  <span>
-                    {distanceKm(
-                      Number(lat), Number(lng),
-                      Number(j?.location?.coordinates?.[1]),
-                      Number(j?.location?.coordinates?.[0])
-                    )} km away
-                  </span>
+                {j.description && (
+                  <p className="text-sm text-gray-600 mt-1 line-clamp-2">{j.description}</p>
+                )}
+                <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+                  <div className="flex items-center gap-1 text-xs text-gray-500">
+                    <MapPin className="w-3 h-3 shrink-0" />
+                    <span>
+                      {distanceKm(
+                        Number(lat), Number(lng),
+                        Number(j?.location?.coordinates?.[1]),
+                        Number(j?.location?.coordinates?.[0])
+                      )} km away
+                    </span>
+                  </div>
+                  {j.budget?.min > 0 && (
+                    <div className="text-xs text-gray-500">
+                      Budget: ₹{j.budget.min} – ₹{j.budget.max}
+                    </div>
+                  )}
                 </div>
               </div>
               <button
-                onClick={() => claim(j._id)}
+                onClick={() => setSelectedJob(j)}
                 className="shrink-0 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors"
               >
-                Claim
+                Bid
               </button>
             </div>
           </div>

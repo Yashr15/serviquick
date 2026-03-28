@@ -37,6 +37,13 @@ variable "private_subnet_cidrs" {
   default     = ["10.0.11.0/24", "10.0.12.0/24"]
 }
 
+# ── HTTPS ─────────────────────────────────────────────────────────────────────
+variable "acm_certificate_arn" {
+  description = "ARN of an ACM certificate for HTTPS. Leave empty to run HTTP-only."
+  type        = string
+  default     = ""
+}
+
 # ── Container images ──────────────────────────────────────────────────────────
 variable "backend_image_tag" {
   description = "Docker image tag for the backend service"
@@ -75,6 +82,31 @@ variable "frontend_memory" {
   default     = 512
 }
 
+# ── ECS service scaling ───────────────────────────────────────────────────────
+variable "backend_desired_count" {
+  description = "Initial number of backend task replicas"
+  type        = number
+  default     = 1
+}
+
+variable "backend_max_count" {
+  description = "Maximum number of backend task replicas (Auto Scaling)"
+  type        = number
+  default     = 4
+}
+
+variable "frontend_desired_count" {
+  description = "Initial number of frontend task replicas"
+  type        = number
+  default     = 1
+}
+
+variable "frontend_max_count" {
+  description = "Maximum number of frontend task replicas (Auto Scaling)"
+  type        = number
+  default     = 4
+}
+
 # ── Application secrets ───────────────────────────────────────────────────────
 variable "mongodb_uri" {
   description = "MongoDB Atlas (or DocumentDB) connection URI"
@@ -86,4 +118,10 @@ variable "jwt_secret" {
   description = "Secret key used to sign JWT tokens"
   type        = string
   sensitive   = true
+}
+
+variable "cors_origin" {
+  description = "Comma-separated list of allowed CORS origins (e.g. https://app.serviquick.io)"
+  type        = string
+  default     = ""
 }

@@ -6,10 +6,12 @@
 #  ├── ECR repositories (backend, frontend)
 #  ├── ECS Cluster (Fargate)
 #  ├── ECS Task Definitions & Services (backend, frontend)
-#  ├── Application Load Balancer (internet-facing)
+#  ├── Application Load Balancer (internet-facing, HTTP + optional HTTPS)
 #  ├── Security Groups (ALB, backend, frontend)
 #  ├── IAM Roles (ECS task execution)
-#  └── SSM Parameter Store (MongoDB URI & JWT secret)
+#  ├── SSM Parameter Store (MongoDB URI & JWT secret)
+#  ├── CloudWatch Log Groups + Alarms
+#  └── Application Auto Scaling (backend & frontend ECS services)
 # ──────────────────────────────────────────────────────────────────────────────
 
 provider "aws" {
@@ -17,8 +19,8 @@ provider "aws" {
 }
 
 locals {
-  name   = "${var.project}-${var.env}"
-  azs    = ["${var.aws_region}a", "${var.aws_region}b"]
+  name = "${var.project}-${var.env}"
+  azs  = ["${var.aws_region}a", "${var.aws_region}b"]
   tags = {
     Project     = var.project
     Environment = var.env
@@ -62,8 +64,9 @@ resource "aws_subnet" "private" {
 
 # ── NAT Gateway (one per VPC for cost efficiency) ────────────────────────────
 resource "aws_eip" "nat" {
-  domain = "vpc"
-  tags   = merge(local.tags, { Name = "${local.name}-nat-eip" })
+  domain     = "vpc"
+  tags       = merge(local.tags, { Name = "${local.name}-nat-eip" })
+  depends_on = [aws_internet_gateway.main]
 }
 
 resource "aws_nat_gateway" "main" {
@@ -142,6 +145,13 @@ resource "aws_ssm_parameter" "jwt_secret" {
   tags  = local.tags
 }
 
+resource "aws_ssm_parameter" "cors_origin" {
+  name  = "/${local.name}/CORS_ORIGIN"
+  type  = "String"
+  value = var.cors_origin
+  tags  = local.tags
+}
+
 # ── IAM – ECS Task Execution Role ─────────────────────────────────────────────
 resource "aws_iam_role" "ecs_task_execution" {
   name = "${local.name}-ecs-task-exec"
@@ -171,14 +181,31 @@ resource "aws_iam_role_policy" "ecs_ssm_read" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect   = "Allow"
-      Action   = ["ssm:GetParameters", "ssm:GetParameter"]
+      Effect = "Allow"
+      Action = ["ssm:GetParameters", "ssm:GetParameter"]
       Resource = [
         aws_ssm_parameter.mongodb_uri.arn,
         aws_ssm_parameter.jwt_secret.arn,
+        aws_ssm_parameter.cors_origin.arn,
       ]
     }]
   })
+}
+
+# ── IAM – ECS Task Role (for Auto Scaling permissions) ────────────────────────
+resource "aws_iam_role" "ecs_task" {
+  name = "${local.name}-ecs-task"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "ecs-tasks.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+
+  tags = local.tags
 }
 
 # ── ECS Cluster ───────────────────────────────────────────────────────────────
@@ -196,14 +223,52 @@ resource "aws_ecs_cluster" "main" {
 # ── CloudWatch Log Groups ─────────────────────────────────────────────────────
 resource "aws_cloudwatch_log_group" "backend" {
   name              = "/ecs/${local.name}/backend"
-  retention_in_days = 14
+  retention_in_days = 30
   tags              = local.tags
 }
 
 resource "aws_cloudwatch_log_group" "frontend" {
   name              = "/ecs/${local.name}/frontend"
-  retention_in_days = 14
+  retention_in_days = 30
   tags              = local.tags
+}
+
+# ── CloudWatch Alarms ─────────────────────────────────────────────────────────
+resource "aws_cloudwatch_metric_alarm" "backend_cpu_high" {
+  alarm_name          = "${local.name}-backend-cpu-high"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/ECS"
+  period              = 60
+  statistic           = "Average"
+  threshold           = 70
+  alarm_description   = "Backend ECS CPU > 70% – consider scaling"
+
+  dimensions = {
+    ClusterName = aws_ecs_cluster.main.name
+    ServiceName = aws_ecs_service.backend.name
+  }
+
+  tags = local.tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "alb_5xx_high" {
+  alarm_name          = "${local.name}-alb-5xx-high"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "HTTPCode_ELB_5XX_Count"
+  namespace           = "AWS/ApplicationELB"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = 20
+  alarm_description   = "ALB 5xx errors > 20/min"
+
+  dimensions = {
+    LoadBalancer = aws_lb.main.arn_suffix
+  }
+
+  tags = local.tags
 }
 
 # ── Security Groups ───────────────────────────────────────────────────────────
@@ -261,17 +326,17 @@ resource "aws_security_group" "frontend" {
   tags = merge(local.tags, { Name = "${local.name}-frontend-sg" })
 }
 
-# Backend: only accept traffic from the frontend service
+# Backend: only accept traffic from the frontend service and ALB
 resource "aws_security_group" "backend" {
   name        = "${local.name}-backend-sg"
-  description = "Backend API – traffic from frontend containers only"
+  description = "Backend API – traffic from frontend and ALB only"
   vpc_id      = aws_vpc.main.id
 
   ingress {
     from_port       = 4000
     to_port         = 4000
     protocol        = "tcp"
-    security_groups = [aws_security_group.frontend.id]
+    security_groups = [aws_security_group.frontend.id, aws_security_group.alb.id]
   }
 
   egress {
@@ -292,9 +357,13 @@ resource "aws_lb" "main" {
   security_groups    = [aws_security_group.alb.id]
   subnets            = aws_subnet.public[*].id
 
+  # Enable access logs for debugging (optional – requires an S3 bucket)
+  # access_logs { bucket = "..." enabled = true }
+
   tags = local.tags
 }
 
+# ── Target groups ─────────────────────────────────────────────────────────────
 resource "aws_lb_target_group" "frontend" {
   name        = "${local.name}-fe-tg"
   port        = 80
@@ -307,19 +376,92 @@ resource "aws_lb_target_group" "frontend" {
     healthy_threshold   = 2
     unhealthy_threshold = 3
     interval            = 30
+    timeout             = 5
+    matcher             = "200"
   }
 
   tags = local.tags
 }
 
+resource "aws_lb_target_group" "backend" {
+  name        = "${local.name}-be-tg"
+  port        = 4000
+  protocol    = "HTTP"
+  vpc_id      = aws_vpc.main.id
+  target_type = "ip"
+
+  health_check {
+    path                = "/health"
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+    interval            = 30
+    timeout             = 5
+    matcher             = "200"
+  }
+
+  tags = local.tags
+}
+
+# ── ALB Listeners ─────────────────────────────────────────────────────────────
+
+# HTTP → redirect to HTTPS when a certificate is provided, else forward
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.main.arn
   port              = 80
   protocol          = "HTTP"
 
   default_action {
+    type = var.acm_certificate_arn != "" ? "redirect" : "forward"
+
+    dynamic "redirect" {
+      for_each = var.acm_certificate_arn != "" ? [1] : []
+      content {
+        port        = "443"
+        protocol    = "HTTPS"
+        status_code = "HTTP_301"
+      }
+    }
+
+    dynamic "forward" {
+      for_each = var.acm_certificate_arn != "" ? [] : [1]
+      content {
+        target_group {
+          arn = aws_lb_target_group.frontend.arn
+        }
+      }
+    }
+  }
+}
+
+# HTTPS listener (only created when an ACM certificate ARN is provided)
+resource "aws_lb_listener" "https" {
+  count             = var.acm_certificate_arn != "" ? 1 : 0
+  load_balancer_arn = aws_lb.main.arn
+  port              = 443
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  certificate_arn   = var.acm_certificate_arn
+
+  default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.frontend.arn
+  }
+}
+
+# /api/* → backend target group
+resource "aws_lb_listener_rule" "api" {
+  listener_arn = var.acm_certificate_arn != "" ? aws_lb_listener.https[0].arn : aws_lb_listener.http.arn
+  priority     = 10
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.backend.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/api/*", "/health"]
+    }
   }
 }
 
@@ -331,6 +473,7 @@ resource "aws_ecs_task_definition" "backend" {
   cpu                      = var.backend_cpu
   memory                   = var.backend_memory
   execution_role_arn       = aws_iam_role.ecs_task_execution.arn
+  task_role_arn            = aws_iam_role.ecs_task.arn
 
   container_definitions = jsonencode([{
     name      = "backend"
@@ -344,12 +487,13 @@ resource "aws_ecs_task_definition" "backend" {
 
     secrets = [
       { name = "MONGODB_URI", valueFrom = aws_ssm_parameter.mongodb_uri.arn },
-      { name = "JWT_SECRET",  valueFrom = aws_ssm_parameter.jwt_secret.arn },
+      { name = "JWT_SECRET", valueFrom = aws_ssm_parameter.jwt_secret.arn },
+      { name = "CORS_ORIGIN", valueFrom = aws_ssm_parameter.cors_origin.arn },
     ]
 
     environment = [
-      { name = "PORT",      value = "4000" },
-      { name = "NODE_ENV",  value = var.env },
+      { name = "PORT", value = "4000" },
+      { name = "NODE_ENV", value = var.env },
     ]
 
     logConfiguration = {
@@ -373,6 +517,7 @@ resource "aws_ecs_task_definition" "frontend" {
   cpu                      = var.frontend_cpu
   memory                   = var.frontend_memory
   execution_role_arn       = aws_iam_role.ecs_task_execution.arn
+  task_role_arn            = aws_iam_role.ecs_task.arn
 
   container_definitions = jsonencode([{
     name      = "frontend"
@@ -403,7 +548,7 @@ resource "aws_ecs_service" "backend" {
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.backend.arn
   launch_type     = "FARGATE"
-  desired_count   = 1
+  desired_count   = var.backend_desired_count
 
   network_configuration {
     subnets          = aws_subnet.private[*].id
@@ -411,9 +556,16 @@ resource "aws_ecs_service" "backend" {
     assign_public_ip = false
   }
 
-  # Ensure the service is replaced gracefully during updates.
+  load_balancer {
+    target_group_arn = aws_lb_target_group.backend.arn
+    container_name   = "backend"
+    container_port   = 4000
+  }
+
   deployment_minimum_healthy_percent = 100
   deployment_maximum_percent         = 200
+
+  depends_on = [aws_lb_listener.http]
 
   tags = local.tags
 }
@@ -424,7 +576,7 @@ resource "aws_ecs_service" "frontend" {
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.frontend.arn
   launch_type     = "FARGATE"
-  desired_count   = 1
+  desired_count   = var.frontend_desired_count
 
   network_configuration {
     subnets          = aws_subnet.private[*].id
@@ -444,4 +596,56 @@ resource "aws_ecs_service" "frontend" {
   depends_on = [aws_lb_listener.http]
 
   tags = local.tags
+}
+
+# ── Application Auto Scaling – Backend ───────────────────────────────────────
+resource "aws_appautoscaling_target" "backend" {
+  max_capacity       = var.backend_max_count
+  min_capacity       = var.backend_desired_count
+  resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.backend.name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  service_namespace  = "ecs"
+}
+
+resource "aws_appautoscaling_policy" "backend_cpu" {
+  name               = "${local.name}-backend-cpu-scale"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.backend.resource_id
+  scalable_dimension = aws_appautoscaling_target.backend.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.backend.service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageCPUUtilization"
+    }
+    target_value       = 60.0
+    scale_in_cooldown  = 300
+    scale_out_cooldown = 60
+  }
+}
+
+# ── Application Auto Scaling – Frontend ──────────────────────────────────────
+resource "aws_appautoscaling_target" "frontend" {
+  max_capacity       = var.frontend_max_count
+  min_capacity       = var.frontend_desired_count
+  resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.frontend.name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  service_namespace  = "ecs"
+}
+
+resource "aws_appautoscaling_policy" "frontend_cpu" {
+  name               = "${local.name}-frontend-cpu-scale"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.frontend.resource_id
+  scalable_dimension = aws_appautoscaling_target.frontend.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.frontend.service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageCPUUtilization"
+    }
+    target_value       = 60.0
+    scale_in_cooldown  = 300
+    scale_out_cooldown = 60
+  }
 }
