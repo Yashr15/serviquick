@@ -1,7 +1,7 @@
-import {useState } from "react";
+import { useState } from "react";
 import api from "../api";
 import toast from "react-hot-toast";
-import { MapPin, Hammer } from "lucide-react";
+import { MapPin, Hammer, Navigation, Locate, Search, SlidersHorizontal } from "lucide-react";
 import L from "leaflet";
 import { MapContainer, TileLayer, Marker, Popup, Circle } from "react-leaflet";
 import { useRef } from "react";
@@ -47,7 +47,7 @@ const DefaultIcon = L.icon({
 L.Marker.prototype.options.icon = DefaultIcon;
 
 function distanceKm(lat1, lon1, lat2, lon2) {
-  const R = 6371; // Earth km radius
+  const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
   const dLon = ((lon2 - lon1) * Math.PI) / 180;
   const a =
@@ -59,6 +59,16 @@ function distanceKm(lat1, lon1, lat2, lon2) {
   return (R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))).toFixed(2);
 }
 
+const CATEGORIES = ["plumber", "electrician", "gardener", "carpenter", "others"];
+
+const STATUS_COLORS = {
+  plumber: "bg-blue-100 text-blue-700",
+  electrician: "bg-amber-100 text-amber-700",
+  gardener: "bg-emerald-100 text-emerald-700",
+  carpenter: "bg-orange-100 text-orange-700",
+  others: "bg-gray-100 text-gray-700",
+};
+
 export default function JobsFeed() {
   const [jobs, setJobs] = useState([]);
   const [cat, setCat] = useState("plumber");
@@ -67,37 +77,35 @@ export default function JobsFeed() {
   const [radius, setRadius] = useState(10);
   const [loading, setLoading] = useState(false);
 
-    const [trackLive, setTrackLive] = useState(false);
-    const [accuracy, setAccuracy] = useState(null);
-    const watchIdRef = useRef(null);
+  const [trackLive, setTrackLive] = useState(false);
+  const [accuracy, setAccuracy] = useState(null);
+  const watchIdRef = useRef(null);
 
-    // start/stop GPS watching
-    useEffect(() => {
+  useEffect(() => {
     if (!trackLive) {
-        if (watchIdRef.current && navigator.geolocation.clearWatch) {
+      if (watchIdRef.current && navigator.geolocation.clearWatch) {
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
-        }
-        return;
+      }
+      return;
     }
     if (!navigator.geolocation) return;
 
     const id = navigator.geolocation.watchPosition(
-        (p) => {
+      (p) => {
         setLat(p.coords.latitude);
         setLng(p.coords.longitude);
-        setAccuracy(p.coords.accuracy ?? null); // meters
-        },
-        (err) => console.debug("geo watch error:", err?.message),
-        { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
+        setAccuracy(p.coords.accuracy ?? null);
+      },
+      (err) => console.debug("geo watch error:", err?.message),
+      { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
     );
     watchIdRef.current = id;
 
     return () => {
-        if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
+      if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
     };
-    }, [trackLive]);
-
+  }, [trackLive]);
 
   const load = async () => {
     setLoading(true);
@@ -113,136 +121,201 @@ export default function JobsFeed() {
   };
 
   useEffect(() => {
-  if (navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition(
-      (p) => { setLat(p.coords.latitude); setLng(p.coords.longitude); },
-      (err) => console.debug("geo error:", err?.message),
-      { enableHighAccuracy: true, timeout: 8000 }
-    );
-  }
-}, []);
-
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (p) => { setLat(p.coords.latitude); setLng(p.coords.longitude); },
+        (err) => console.debug("geo error:", err?.message),
+        { enableHighAccuracy: true, timeout: 8000 }
+      );
+    }
+  }, []);
 
   const claim = async (id) => {
     try {
-      await api.post(`/api/jobs/${id}/claim`, { message:"I can do this", bidAmount:500 });
+      await api.post(`/api/jobs/${id}/claim`, { message: "I can do this", bidAmount: 500 });
       toast.success("Proposal sent!");
     } catch (e) {
       toast.error(e.response?.data?.error || "Failed to claim");
     }
   };
 
-  return (
-    <div className="max-w-3xl mx-auto">
-      <h2 className="text-2xl font-bold mb-3">Nearby Jobs</h2>
-      <div className="grid grid-cols-7 gap-2 mb-4">
-        <select className="border p-2 rounded" value={cat} onChange={(e)=>setCat(e.target.value)}>
-          <option>plumber</option>
-          <option>electrician</option>
-          <option>gardener</option>
-          <option>carpenter</option>
-          <option >others</option>
-        </select>
-        <input className="border p-2 rounded" value={lng} onChange={(e)=>setLng(e.target.value)} />
-        <input className="border p-2 rounded" value={lat} onChange={(e)=>setLat(e.target.value)} />
-        <input className="border p-2 rounded" value={radius} onChange={(e)=>setRadius(e.target.value)} />
-        <button className="bg-black text-white rounded" onClick={load} disabled={loading}>
-        {loading ? "Loading..." : "Search"}
-        </button>
-        {/* live tracking toggle */}
-        <button
-            type="button"
-            className={`rounded px-3 ${trackLive ? "bg-blue-600 text-white" : "bg-gray-200"}`}
-            onClick={() => setTrackLive(v => !v)}
-            title="Track my movement"
-        >
-            {trackLive ? "Tracking…" : "Track me"}
-        </button>
+  const recenter = () => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition((p) => {
+        setLat(p.coords.latitude);
+        setLng(p.coords.longitude);
+      });
+    }
+  };
 
-        {/* ✅ Recenter Button */}
-        <button
-            type="button"
-            className="bg-blue-600 text-white rounded px-3"
-            onClick={() => {
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition((p) => {
-                setLat(p.coords.latitude);
-                setLng(p.coords.longitude);
-                });
-            }
-            }}
-        >
-            Recenter
-        </button>
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900">Nearby Jobs</h1>
+        <p className="text-sm text-gray-500 mt-1">Find open jobs in your area and send a proposal.</p>
       </div>
 
-      <div className="h-[300px] w-full mb-4 border rounded overflow-hidden">
-        <MapContainer
-            center={[+lat, +lng]}  // only used on first mount
-            zoom={13}
-            style={{ height: "100%", width: "100%" }}
-        >
-            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-
-            <RecenterOnUser lat={+lat} lng={+lng} />
-            <FitBoundsOnJobs lat={+lat} lng={+lng} jobs={jobs} />
-
-            {/* you (marker + accuracy) */}
-            {accuracy && (
-            <Circle
-                center={[+lat, +lng]}
-                radius={accuracy}        // meters
-                pathOptions={{ color: "#60a5fa", fillColor: "#93c5fd", fillOpacity: 0.2 }}
-            />
-            )}
-            <Marker position={[+lat, +lng]}>
-            <Popup>You are here</Popup>
-            </Marker>
-
-            {/* jobs */}
-            {jobs.map((j) => (
-            <Marker
-                key={j._id}
-                position={[+j.location.coordinates[1], +j.location.coordinates[0]]}
+      {/* Filters */}
+      <div className="bg-white border border-gray-200 rounded-2xl shadow-sm p-4">
+        <div className="flex items-center gap-2 mb-3 text-sm font-medium text-gray-700">
+          <SlidersHorizontal className="w-4 h-4 text-blue-500" /> Filters
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {/* Category */}
+          <div className="space-y-1">
+            <label className="text-xs text-gray-500 font-medium">Category</label>
+            <select
+              className="w-full border border-gray-300 rounded-lg py-2 px-3 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
+              value={cat}
+              onChange={(e) => setCat(e.target.value)}
             >
-                <Popup>
+              {CATEGORIES.map(c => (
+                <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Radius */}
+          <div className="space-y-1">
+            <label className="text-xs text-gray-500 font-medium">Radius (km)</label>
+            <input
+              type="number"
+              min="1"
+              max="100"
+              className="w-full border border-gray-300 rounded-lg py-2 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
+              value={radius}
+              onChange={(e) => setRadius(e.target.value)}
+            />
+          </div>
+
+          {/* Location coords (compact) */}
+          <div className="space-y-1">
+            <label className="text-xs text-gray-500 font-medium">Latitude</label>
+            <input
+              className="w-full border border-gray-300 rounded-lg py-2 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
+              value={lat}
+              onChange={(e) => setLat(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs text-gray-500 font-medium">Longitude</label>
+            <input
+              className="w-full border border-gray-300 rounded-lg py-2 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
+              value={lng}
+              onChange={(e) => setLng(e.target.value)}
+            />
+          </div>
+        </div>
+
+        {/* Action buttons */}
+        <div className="flex gap-2 mt-3">
+          <button
+            onClick={load}
+            disabled={loading}
+            className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-lg text-sm transition-colors disabled:opacity-60"
+          >
+            <Search className="w-4 h-4" />
+            {loading ? "Searching…" : "Search"}
+          </button>
+          <button
+            type="button"
+            onClick={recenter}
+            className="flex items-center gap-1.5 border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium px-4 py-2 rounded-lg text-sm transition-colors"
+          >
+            <Locate className="w-4 h-4" /> Recenter
+          </button>
+          <button
+            type="button"
+            onClick={() => setTrackLive(v => !v)}
+            className={`flex items-center gap-1.5 font-medium px-4 py-2 rounded-lg text-sm transition-colors ${
+              trackLive
+                ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                : "border border-gray-300 text-gray-700 hover:bg-gray-50"
+            }`}
+          >
+            <Navigation className="w-4 h-4" />
+            {trackLive ? "Tracking…" : "Track me"}
+          </button>
+        </div>
+      </div>
+
+      {/* Map */}
+      <div className="h-[320px] w-full rounded-2xl border border-gray-200 overflow-hidden shadow-sm">
+        <MapContainer
+          center={[+lat, +lng]}
+          zoom={13}
+          style={{ height: "100%", width: "100%" }}
+        >
+          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+          <RecenterOnUser lat={+lat} lng={+lng} />
+          <FitBoundsOnJobs lat={+lat} lng={+lng} jobs={jobs} />
+          {accuracy && (
+            <Circle
+              center={[+lat, +lng]}
+              radius={accuracy}
+              pathOptions={{ color: "#60a5fa", fillColor: "#93c5fd", fillOpacity: 0.2 }}
+            />
+          )}
+          <Marker position={[+lat, +lng]}>
+            <Popup>You are here</Popup>
+          </Marker>
+          {jobs.map((j) => (
+            <Marker
+              key={j._id}
+              position={[+j.location.coordinates[1], +j.location.coordinates[0]]}
+            >
+              <Popup>
                 <b>{j.title}</b><br />
                 {j.category}<br />
                 {distanceKm(+lat, +lng, +j.location.coordinates[1], +j.location.coordinates[0])} km away
-                </Popup>
+              </Popup>
             </Marker>
-            ))}
+          ))}
         </MapContainer>
-    </div>
+      </div>
 
-
-
-
+      {/* Job cards */}
       <div className="space-y-3">
+        {jobs.length === 0 && !loading && (
+          <div className="text-center py-12 text-gray-500">
+            <Hammer className="w-10 h-10 mx-auto mb-3 text-gray-300" />
+            <p className="font-medium">No jobs found</p>
+            <p className="text-sm">Try adjusting your filters or increasing the radius.</p>
+          </div>
+        )}
+
         {jobs.map(j => (
-          <div key={j._id} className="border rounded p-3 hover:shadow-sm transition">
-            <div className="flex items-center gap-2">
-              <Hammer className="w-4 h-4" />
-              <div className="font-semibold">{j.title}</div>
-              <span className="text-xs bg-gray-100 px-2 py-0.5 rounded">{j.category}</span>
+          <div key={j._id} className="bg-white border border-gray-200 rounded-2xl p-4 shadow-sm hover:shadow-md transition-shadow">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Hammer className="w-4 h-4 text-blue-500 shrink-0" />
+                  <span className="font-semibold text-gray-900 truncate">{j.title}</span>
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_COLORS[j.category] ?? "bg-gray-100 text-gray-600"}`}>
+                    {j.category}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1 text-xs text-gray-500 mt-1.5">
+                  <MapPin className="w-3 h-3 shrink-0" />
+                  <span>
+                    {distanceKm(
+                      Number(lat), Number(lng),
+                      Number(j?.location?.coordinates?.[1]),
+                      Number(j?.location?.coordinates?.[0])
+                    )} km away
+                  </span>
+                </div>
+              </div>
+              <button
+                onClick={() => claim(j._id)}
+                className="shrink-0 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors"
+              >
+                Claim
+              </button>
             </div>
-            <div className="text-xs text-gray-500 flex items-center gap-1 mt-1">
-              <MapPin className="w-3 h-3" />
-              <span>lng {j.location?.coordinates?.[0]}, lat {j.location?.coordinates?.[1]}</span>
-            </div>
-            <div className="text-xs text-gray-500 mt-1">
-                {distanceKm(
-                    Number(lat), Number(lng),
-                    Number(j?.location?.coordinates?.[1]),
-                    Number(j?.location?.coordinates?.[0])
-                )} km away
-            </div>
-            <button onClick={()=>claim(j._id)} className="mt-2 px-3 py-1 bg-black text-white rounded">
-              Claim
-            </button>
           </div>
         ))}
-        {jobs.length===0 && <p className="text-gray-500">No jobs found.</p>}
       </div>
     </div>
   );
