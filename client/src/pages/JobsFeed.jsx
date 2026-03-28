@@ -112,9 +112,9 @@ export default function JobsFeed() {
     try {
       const qs = new URLSearchParams({ category: cat, lng, lat, radius });
       const { data } = await api.get(`/api/jobs?${qs.toString()}`);
-      setJobs(data);
+      setJobs(data.jobs ?? data);
     } catch (e) {
-      toast.error(e.response?.data?.error || "Failed to load");
+      toast.error(e.response?.data?.error || e.message || "Failed to load");
     } finally {
       setLoading(false);
     }

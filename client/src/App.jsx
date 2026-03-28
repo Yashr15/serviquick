@@ -9,6 +9,9 @@ import MyJobs from "./pages/MyJobs";
 import JobProposals from "./pages/JobProposals";
 import RateProvider from "./pages/RateProvider";
 import ProviderProfile from "./pages/ProviderProfile";
+import Profile from "./pages/Profile";
+import Notifications from "./pages/Notifications";
+import NotFound from "./pages/NotFound";
 
 
 
@@ -35,7 +38,10 @@ export default function App() {
           <Route path="/rate/:id" element={<Private><RateProvider /></Private>} />
           <Route path="/provider/:id" element={<Private><ProviderProfile /></Private>} />
 
-          <Route path="*" element={<div className="text-gray-500">Page not found</div>} />
+          <Route path="/profile" element={<Private><Profile /></Private>} />
+          <Route path="/notifications" element={<Private><Notifications /></Private>} />
+
+          <Route path="*" element={<NotFound />} />
         </Routes>
       </Layout>
     </BrowserRouter>
