@@ -1,8 +1,18 @@
 node_modules/
 .env
+.env.*
+!.env.example
 .DS_Store
 npm-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 coverage/
 dist/
+
+# Terraform
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/terraform.tfvars
+terraform/*.tfplan
