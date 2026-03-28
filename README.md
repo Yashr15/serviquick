@@ -8,10 +8,13 @@ A full-stack, location-aware service marketplace that connects people who need h
 
 1. [Architecture overview](#architecture-overview)
 2. [Tech stack](#tech-stack)
-3. [Local development](#local-development)
-4. [API reference](#api-reference)
-5. [AWS deployment guide](#aws-deployment-guide)
-   - [Prerequisites](#prerequisites)
+3. [Prerequisites](#prerequisites)
+4. [Local development](#local-development)
+   - [Option A – Docker Compose (recommended)](#option-a--docker-compose-recommended)
+   - [Option B – Manual setup](#option-b--manual-setup)
+5. [Environment variables](#environment-variables)
+6. [API reference](#api-reference)
+7. [AWS deployment guide](#aws-deployment-guide)
    - [Step 1 – MongoDB Atlas](#step-1--mongodb-atlas)
    - [Step 2 – AWS IAM user](#step-2--aws-iam-user)
    - [Step 3 – Terraform init & apply](#step-3--terraform-init--apply)
@@ -19,8 +22,7 @@ A full-stack, location-aware service marketplace that connects people who need h
    - [Step 5 – (Optional) HTTPS with ACM](#step-5--optional-https-with-acm)
    - [Step 6 – Verify the deployment](#step-6--verify-the-deployment)
    - [Step 7 – CI/CD with GitHub Actions](#step-7--cicd-with-github-actions)
-6. [Environment variables](#environment-variables)
-7. [Features](#features)
+8. [Features](#features)
 
 ---
 
@@ -83,50 +85,129 @@ AWS resources
 
 ---
 
+## Prerequisites
+
+| Tool | Version | Install |
+|------|---------|---------|
+| Node.js | ≥ 20 | https://nodejs.org |
+| Docker & Docker Compose | ≥ 24 | https://docs.docker.com/get-docker/ |
+| AWS CLI | v2 | https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html |
+| Terraform | ≥ 1.6 | https://developer.hashicorp.com/terraform/install |
+
+---
+
 ## Local development
 
-### Requirements
+### Option A – Docker Compose (recommended)
 
-- Node.js 20+
-- Docker & Docker Compose
-- (Optional) MongoDB compass for local inspection
-
-### Quick start (Docker Compose)
+This starts MongoDB, the backend API, and the React frontend all in one command.
 
 ```bash
-# 1. Copy env file and fill in your values
-cp .env.example .env
+# 1. Clone the repository
+git clone https://github.com/Yashr15/serviquick.git
+cd serviquick
 
-# 2. Start everything (Mongo + backend + frontend)
+# 2. Copy the environment template and review the values
+cp .env.example .env
+# The defaults work out-of-the-box for Docker Compose.
+# Change JWT_SECRET to a random string before running.
+
+# 3. Start all services
 docker compose up --build
 
-# 3. Open the app
-open http://localhost        # frontend (Nginx)
-open http://localhost:4000   # backend API
+# 4. Open the app
+#   Frontend (React/Nginx):  http://localhost
+#   Backend API:             http://localhost:4000
+#   Health check:            http://localhost:4000/health
 ```
 
-### Backend only
+To stop:
 
 ```bash
-# Install deps
+docker compose down          # stop containers (data preserved)
+docker compose down -v       # stop and delete the MongoDB volume
+```
+
+---
+
+### Option B – Manual setup
+
+Run the backend and frontend separately without Docker.
+
+#### 1. Start a local MongoDB instance
+
+```bash
+# Using Docker (easiest):
+docker run -d --name mongo \
+  -p 27017:27017 \
+  -e MONGO_INITDB_ROOT_USERNAME=admin \
+  -e MONGO_INITDB_ROOT_PASSWORD=changeme \
+  mongo:7.0
+
+# Or install MongoDB Community Edition:
+# https://www.mongodb.com/docs/manual/installation/
+```
+
+#### 2. Start the backend
+
+```bash
+# From the project root
 npm install
 
-# Copy and edit .env
+# Create the .env file
 cp .env.example .env
+# Edit .env – at minimum set MONGODB_URI and JWT_SECRET
 
-# Run in dev mode (nodemon hot-reload)
+# Run in development mode (nodemon hot-reload)
 npm run dev
+# → API available at http://localhost:4000
 ```
 
-### Frontend only
+#### 3. Start the frontend
 
 ```bash
+# In a separate terminal
 cd client
 npm install
 
-# Point at the local backend
+# Point the frontend at the local backend
 VITE_API_URL=http://localhost:4000 npm run dev
+# → App available at http://localhost:5173
 ```
+
+#### 4. Verify everything works
+
+```bash
+# Health check
+curl http://localhost:4000/health
+# → {"ok":true,"uptime":...,"timestamp":"..."}
+
+# Protected route (should return 401 without a token)
+curl http://localhost:4000/api/auth/me
+# → {"error":"No token"}
+```
+
+---
+
+## Environment variables
+
+### Backend (`.env`)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `PORT` | No | `4000` | Server port |
+| `MONGODB_URI` | **Yes** | — | MongoDB connection string |
+| `JWT_SECRET` | **Yes** | — | Long random string for signing JWTs. Generate with `openssl rand -hex 32` |
+| `NODE_ENV` | No | `development` | Set to `production` in production |
+| `CORS_ORIGIN` | No | `http://localhost:5173,http://localhost:5174` | Comma-separated list of allowed origins |
+| `MONGO_ROOT_USER` | No | `admin` | MongoDB root username (docker-compose only) |
+| `MONGO_ROOT_PASSWORD` | No | `changeme` | MongoDB root password (docker-compose only) |
+
+### Frontend (build-time)
+
+| Variable | Description |
+|----------|-------------|
+| `VITE_API_URL` | Backend base URL (e.g. `http://localhost:4000` in dev, or your ALB DNS/domain in prod). When running via Docker Compose, the Nginx proxy handles `/api/*` forwarding so this is set to `/api`. |
 
 ---
 
@@ -152,6 +233,7 @@ All protected routes require `Authorization: Bearer <token>`.
 | `GET` | `/api/jobs` | any | List jobs (filter: category, status, search, lng, lat, radius, page, limit) |
 | `GET` | `/api/jobs/:id` | any | Get single job |
 | `PATCH` | `/api/jobs/:id` | requester | Edit open job |
+| `DELETE` | `/api/jobs/:id` | requester | Delete open job |
 | `POST` | `/api/jobs/:id/cancel` | requester | Cancel open/assigned job |
 | `POST` | `/api/jobs/:id/claim` | provider | Submit a bid |
 | `POST` | `/api/jobs/:id/accept` | requester | Accept a proposal |
@@ -177,20 +259,18 @@ All protected routes require `Authorization: Bearer <token>`.
 | `GET` | `/api/reviews/provider/:id` | — | Provider rating summary |
 | `GET` | `/api/reviews/provider/:id/list` | — | All reviews for a provider |
 
+### Notifications
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/notifications` | ✅ any | List notifications (paginated) |
+| `GET` | `/api/notifications/unread-count` | ✅ any | Unread notification count |
+| `PATCH` | `/api/notifications/:id/read` | ✅ any | Mark single notification as read |
+| `PATCH` | `/api/notifications/read-all` | ✅ any | Mark all notifications as read |
+
 ---
 
 ## AWS deployment guide
-
-### Prerequisites
-
-| Tool | Version | Install |
-|------|---------|---------|
-| AWS CLI | v2 | https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html |
-| Terraform | ≥ 1.6 | https://developer.hashicorp.com/terraform/install |
-| Docker | ≥ 24 | https://docs.docker.com/get-docker/ |
-| Node.js | ≥ 20 | https://nodejs.org |
-
----
 
 ### Step 1 – MongoDB Atlas
 
@@ -280,7 +360,7 @@ terraform apply \
   -var="cors_origin=http://YOUR_ALB_DNS"
 ```
 
-> **Tip:** Store sensitive vars in a `terraform.tfvars` file (already in `.gitignore`) or in AWS Secrets Manager / a CI/CD secret store. Never commit them.
+> **Tip:** Store sensitive vars in a `terraform.tfvars` file (already in `.gitignore`) or in AWS Secrets Manager. Never commit them.
 
 After apply, note the outputs:
 
@@ -345,7 +425,7 @@ aws ecs update-service \
 
 For production, always use HTTPS.
 
-1. **Request a certificate** in ACM (us-east-1 for CloudFront, or your region for ALB):
+1. **Request a certificate** in ACM:
    ```bash
    aws acm request-certificate \
      --domain-name app.yourdomain.com \
@@ -385,7 +465,7 @@ open http://$ALB_DNS
 Check logs in CloudWatch:
 
 ```bash
-# Backend logs (last 50 lines)
+# Backend logs (live tail)
 aws logs tail /ecs/serviquick-prod/backend --follow --region $AWS_REGION
 
 # Frontend logs
@@ -396,93 +476,22 @@ aws logs tail /ecs/serviquick-prod/frontend --follow --region $AWS_REGION
 
 ### Step 7 – CI/CD with GitHub Actions
 
-Create `.github/workflows/deploy.yml`:
+A workflow file is included at `.github/workflows/deploy.yml`. It automatically builds and deploys both Docker images to AWS ECS on every push to `main`.
 
-```yaml
-name: Deploy to AWS
-
-on:
-  push:
-    branches: [main]
-
-env:
-  AWS_REGION: ap-south-1
-  CLUSTER: serviquick-prod-cluster
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Login to ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build & push backend
-        run: |
-          docker build -t ${{ secrets.BACKEND_ECR }}:$GITHUB_SHA .
-          docker push ${{ secrets.BACKEND_ECR }}:$GITHUB_SHA
-
-      - name: Build & push frontend
-        run: |
-          docker build \
-            --build-arg VITE_API_URL=${{ secrets.VITE_API_URL }} \
-            -t ${{ secrets.FRONTEND_ECR }}:$GITHUB_SHA \
-            ./client
-          docker push ${{ secrets.FRONTEND_ECR }}:$GITHUB_SHA
-
-      - name: Deploy backend
-        run: |
-          aws ecs update-service \
-            --cluster $CLUSTER \
-            --service serviquick-prod-backend \
-            --force-new-deployment
-
-      - name: Deploy frontend
-        run: |
-          aws ecs update-service \
-            --cluster $CLUSTER \
-            --service serviquick-prod-frontend \
-            --force-new-deployment
-```
-
-Add these **GitHub Secrets**:
+Add the following **GitHub repository secrets** (Settings → Secrets and variables → Actions):
 
 | Secret | Value |
 |--------|-------|
-| `AWS_ACCESS_KEY_ID` | IAM access key |
-| `AWS_SECRET_ACCESS_KEY` | IAM secret key |
-| `BACKEND_ECR` | ECR URL for backend |
-| `FRONTEND_ECR` | ECR URL for frontend |
+| `AWS_ACCESS_KEY_ID` | IAM access key ID from Step 2 |
+| `AWS_SECRET_ACCESS_KEY` | IAM secret access key from Step 2 |
+| `BACKEND_ECR` | ECR URL for backend (from Terraform output) |
+| `FRONTEND_ECR` | ECR URL for frontend (from Terraform output) |
 | `VITE_API_URL` | `http(s)://YOUR_ALB_OR_DOMAIN` |
 
----
-
-## Environment variables
-
-### Backend (`.env`)
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `PORT` | No | Server port (default: 4000) |
-| `MONGODB_URI` | **Yes** | MongoDB connection string |
-| `JWT_SECRET` | **Yes** | Long random string for signing JWTs |
-| `NODE_ENV` | No | `development` or `production` |
-| `CORS_ORIGIN` | No | Comma-separated allowed origins |
-
-### Frontend (build args / `.env`)
-
-| Variable | Description |
-|----------|-------------|
-| `VITE_API_URL` | Backend base URL (e.g. `http://localhost:4000` or ALB DNS) |
+Once secrets are configured, every push to `main` will:
+1. Build and push backend & frontend Docker images (tagged with the commit SHA and `latest`)
+2. Trigger ECS rolling deployments for both services
+3. Wait for deployments to stabilise before the job completes
 
 ---
 
@@ -498,7 +507,8 @@ Add these **GitHub Secrets**:
 - **Job lifecycle**: open → assigned → completed / cancelled
 - **Mock payment recording** on job completion
 - **Ratings & reviews** with per-provider aggregated score
-- **Rate limiting** (300 req/15 min global; 20 req/15 min on auth endpoints)
+- **Notifications** for proposals, acceptance/rejection, and job completion
+- **Rate limiting** (100 req/15 min on API endpoints; 20 req/15 min on auth endpoints)
 - **Helmet** security headers, **compression**, **Morgan** request logging
 - **Graceful shutdown** + MongoDB reconnect with retry logic
 
